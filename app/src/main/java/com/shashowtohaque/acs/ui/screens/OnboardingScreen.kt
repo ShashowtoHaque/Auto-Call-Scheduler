@@ -1,9 +1,11 @@
 package com.shashowtohaque.acs.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -11,6 +13,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -19,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+@Immutable
 data class PermissionStatusItem(
     val id: String,
     val title: String,
@@ -26,6 +31,9 @@ data class PermissionStatusItem(
     val isGranted: Boolean,
     val onRequest: () -> Unit
 )
+
+private val GrantedGreen = Color(0xFF10B981)
+private val MissingRed = Color(0xFFEF4444)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +46,9 @@ fun OnboardingScreen(
     BackHandler(enabled = !allPermissionsGranted) {
         onExitClicked()
     }
+
+    val listState = rememberLazyListState()
+    val grantedCount = remember(permissionList) { permissionList.count { it.isGranted } }
 
     Scaffold(
         topBar = {
@@ -65,7 +76,6 @@ fun OnboardingScreen(
                         .navigationBarsPadding()
                         .padding(16.dp)
                 ) {
-                    val grantedCount = permissionList.count { it.isGranted }
                     Text(
                         text = "$grantedCount of ${permissionList.size} Permissions Verified",
                         style = MaterialTheme.typography.labelLarge,
@@ -114,19 +124,18 @@ fun OnboardingScreen(
         }
     ) { paddingValues ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(paddingValues),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                    ),
+            item(key = "advisory_banner", contentType = "banner") {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.padding(vertical = 8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -145,8 +154,8 @@ fun OnboardingScreen(
                 PermissionCard(item = item)
             }
 
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
+            item(key = "bottom_spacer", contentType = "spacer") {
+                Spacer(modifier = Modifier.height(8.dp))
             }
         }
     }
@@ -154,25 +163,33 @@ fun OnboardingScreen(
 
 @Composable
 fun PermissionCard(item: PermissionStatusItem) {
-    ElevatedCard(
+    val cardBorderColor = if (item.isGranted) {
+        GrantedGreen.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
+    }
+    OutlinedCard(
         shape = RoundedCornerShape(14.dp),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+        border = BorderStroke(1.dp, cardBorderColor),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = if (item.isGranted) Icons.Default.CheckCircle else Icons.Default.Warning,
                 contentDescription = null,
-                tint = if (item.isGranted) Color(0xFF10B981) else Color(0xFFEF4444),
-                modifier = Modifier.size(28.dp)
+                tint = if (item.isGranted) GrantedGreen else MissingRed,
+                modifier = Modifier.size(26.dp)
             )
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -206,12 +223,12 @@ fun PermissionCard(item: PermissionStatusItem) {
                 } else {
                     Surface(
                         shape = CircleShape,
-                        color = Color(0xFF10B981).copy(alpha = 0.15f),
+                        color = GrantedGreen.copy(alpha = 0.15f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
                             text = "Ready",
-                            color = Color(0xFF10B981),
+                            color = GrantedGreen,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center,
@@ -221,5 +238,5 @@ fun PermissionCard(item: PermissionStatusItem) {
                 }
             }
         }
-    }
+}
 }

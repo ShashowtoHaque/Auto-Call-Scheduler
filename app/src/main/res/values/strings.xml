@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Auto Call Scheduler</string>
+    <string name="accessibility_service_label">Auto Call Scheduler (Airplane Mode Helper)</string>
+    <string name="accessibility_service_description">Optional helper that toggles Airplane Mode OFF before a scheduled call when Respect Airplane Mode is unchecked.</string>
 </resources>

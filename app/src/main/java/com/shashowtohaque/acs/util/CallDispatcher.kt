@@ -13,6 +13,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -40,6 +41,7 @@ import com.shashowtohaque.acs.data.local.RepeatIntervalUnit
 import com.shashowtohaque.acs.data.local.ScheduleStatus
 import com.shashowtohaque.acs.data.local.SimSlot
 import com.shashowtohaque.acs.receiver.AlarmReceiver
+import com.shashowtohaque.acs.service.AirplaneModeAccessibilityService
 import com.shashowtohaque.acs.service.CallSchedulerService
 import java.util.Calendar
 import kotlin.math.min
@@ -68,10 +70,13 @@ object CallDispatcher {
     const val ACTION_REMIND_CALL = "com.shashowtohaque.acs.ACTION_REMIND_CALL"
     const val ACTION_WATCHDOG_CHECK = "com.shashowtohaque.acs.ACTION_WATCHDOG_CHECK"
     const val EXTRA_DISPATCH_CALL_ID = "extra_dispatch_call_id"
+    const val EXTRA_AFTER_AIRPLANE_RECOVERY = "extra_after_airplane_recovery"
     private const val REMINDER_SOUND_CHANNEL_ID = "ACS_CALL_REMINDER_SOUND_CHANNEL"
     private const val REMINDER_VIBRATE_CHANNEL_ID = "ACS_CALL_REMINDER_VIBRATE_CHANNEL"
     private const val CALL_TRIGGER_CHANNEL_ID = "ACS_CALL_TRIGGER_CHANNEL"
     private const val REMINDER_REQUEST_OFFSET = 1_000_000
+    private const val RECOVERY_REQUEST_OFFSET = 1_500_000
+    private const val RECOVERY_NOTIF_OFFSET = 1_600_000
     private const val WATCHDOG_REQUEST_CODE = 19_001
     private const val WATCHDOG_INTERVAL_MS = 15 * 60 * 1000L
 
@@ -415,6 +420,104 @@ object CallDispatcher {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         alarmManager.cancel(reminderPendingIntent)
+
+        val recoveryIntent = Intent(context, AlarmReceiver::class.java).apply {
+            action = ACTION_EXECUTE_CALL
+            putExtra(AlarmReceiver.EXTRA_SCHEDULE_ID, scheduleId)
+            putExtra(EXTRA_AFTER_AIRPLANE_RECOVERY, true)
+        }
+        val recoveryPendingIntent = PendingIntent.getBroadcast(
+            context,
+            scheduleId.toInt() + RECOVERY_REQUEST_OFFSET,
+            recoveryIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(recoveryPendingIntent)
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(scheduleId.toInt() + RECOVERY_NOTIF_OFFSET)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Schedules an exact wakeup 15 seconds after turning Airplane Mode OFF so cellular radios
+     * stabilize cleanly without holding BroadcastReceiver goAsync().
+     */
+    fun schedulePostAirplaneRecoveryAlarm(
+        context: Context,
+        schedule: CallScheduleEntity,
+        delayMs: Long = 15_000L
+    ) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val triggerAt = System.currentTimeMillis() + delayMs
+        val recoveryIntent = Intent(context, AlarmReceiver::class.java).apply {
+            action = ACTION_EXECUTE_CALL
+            putExtra(AlarmReceiver.EXTRA_SCHEDULE_ID, schedule.id)
+            putExtra(EXTRA_AFTER_AIRPLANE_RECOVERY, true)
+        }
+        val recoveryPending = PendingIntent.getBroadcast(
+            context,
+            schedule.id.toInt() + RECOVERY_REQUEST_OFFSET,
+            recoveryIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val showAppIntent = PendingIntent.getActivity(
+            context,
+            schedule.id.toInt() + 500_000,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val canUseExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+        if (canUseExact) {
+            try {
+                alarmManager.setAlarmClock(
+                    AlarmManager.AlarmClockInfo(triggerAt, showAppIntent),
+                    recoveryPending
+                )
+            } catch (_: SecurityException) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    recoveryPending
+                )
+            }
+        } else {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                recoveryPending
+            )
+        }
+
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CALL_TRIGGER_CHANNEL_ID,
+                    "Scheduled Call Execution",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                }
+                nm.createNotificationChannel(channel)
+            }
+            val delaySec = (delayMs / 1000L).coerceAtLeast(1L)
+            val notification = NotificationCompat.Builder(context, CALL_TRIGGER_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification_logo)
+                .setContentTitle("Airplane Mode Turned OFF")
+                .setContentText("Waiting ${delaySec}s for cellular signal before dialing ${schedule.contactName}")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setContentIntent(showAppIntent)
+                .build()
+            nm.notify(schedule.id.toInt() + RECOVERY_NOTIF_OFFSET, notification)
+        } catch (_: Exception) {
+        }
     }
 
     /**
@@ -622,6 +725,11 @@ object CallDispatcher {
      */
     @SuppressLint("MissingPermission")
     fun executeCall(context: Context, schedule: CallScheduleEntity): CallDispatchResult {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(schedule.id.toInt() + RECOVERY_NOTIF_OFFSET)
+        } catch (_: Exception) {
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
             postFullScreenCallFallback(context, schedule)
             return CallDispatchResult(
@@ -755,29 +863,86 @@ object CallDispatcher {
 
     /**
      * Attempts to turn Airplane Mode OFF when Respect Airplane Mode is unchecked.
-     * Requires WRITE_SECURE_SETTINGS (ADB/system) or root shell on Android 4.2+.
+     * Note: Android 10-15 / HyperOS restricts Settings.Global.AIRPLANE_MODE_ON from WRITE_SETTINGS alone.
+     * Tries in order:
+     * 1) Root shell (su)
+     * 2) ConnectivityManager.setAirplaneMode(false)
+     * 3) Built-in Accessibility Helper (taps OS Settings / Quick Settings toggle on unrooted devices)
+     * 4) WRITE_SECURE_SETTINGS (ADB grant) + protected broadcast in separate try/catch blocks
+     * 5) Unprivileged connectivity command fallback
      */
+    @SuppressLint("PrivateApi")
     fun disableAirplaneMode(context: Context): Boolean {
+        if (!isAirplaneModeOn(context)) return true
+
+        // 1. Root shell path (cleanly cycles ConnectivityService & telephony radios)
         try {
-            Settings.Global.putInt(
-                context.contentResolver,
-                Settings.Global.AIRPLANE_MODE_ON,
-                0
-            )
-            val intent = Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED).apply {
-                putExtra("state", false)
-            }
-            context.sendBroadcast(intent)
-        } catch (_: SecurityException) {
-            // Fallback for privileged/ADB shell environments
-            try {
-                Runtime.getRuntime().exec(arrayOf("cmd", "connectivity", "airplane-mode", "disable")).waitFor()
-            } catch (_: Exception) {
-                // Ignore shell fallback failure
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "cmd connectivity airplane-mode disable")).waitFor()
+            SystemClock.sleep(500L)
+            if (!isAirplaneModeOn(context)) return true
+
+            Runtime.getRuntime().exec(
+                arrayOf(
+                    "su",
+                    "-c",
+                    "settings put global airplane_mode_on 0 && am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false"
+                )
+            ).waitFor()
+            SystemClock.sleep(500L)
+            if (!isAirplaneModeOn(context)) return true
+        } catch (_: Exception) {
+            // Device not rooted
         }
+
+        // 2. ConnectivityManager.setAirplaneMode(false) via reflection (succeeds if privileged)
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null) {
+                val method = cm.javaClass.getMethod("setAirplaneMode", Boolean::class.javaPrimitiveType)
+                method.invoke(cm, false)
+                SystemClock.sleep(500L)
+                if (!isAirplaneModeOn(context)) return true
+            }
+        } catch (_: Exception) {
+            // Requires NETWORK_SETTINGS / system privilege on standard builds
+        }
+
+        // 3. Optional AccessibilityService path (works on stock unrooted Android 10-15 & HyperOS)
+        if (AirplaneModeAccessibilityService.isRunning()) {
+            if (AirplaneModeAccessibilityService.disableAirplaneModeBlocking(context)) {
+                return true
+            }
+        }
+
+        // 4. ADB WRITE_SECURE_SETTINGS path — keep putInt, protected sendBroadcast & shell isolated
+        if (PermissionHelper.isWriteSecureSettingsGranted(context)) {
+            try {
+                Settings.Global.putInt(
+                    context.contentResolver,
+                    Settings.Global.AIRPLANE_MODE_ON,
+                    0
+                )
+            } catch (_: SecurityException) {
+            } catch (_: Exception) {
+            }
+
+            try {
+                val intent = Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED).apply {
+                    putExtra("state", false)
+                }
+                context.sendBroadcast(intent)
+            } catch (_: SecurityException) {
+                // Protected broadcast on Android 11+; ignore without masking earlier steps
+            } catch (_: Exception) {
+            }
+        }
+
+        // 5. Shell connectivity fallback (if process holds shell-compatible capabilities)
+        try {
+            Runtime.getRuntime().exec(arrayOf("cmd", "connectivity", "airplane-mode", "disable")).waitFor()
+        } catch (_: Exception) {
+        }
+
         return !isAirplaneModeOn(context)
     }
 

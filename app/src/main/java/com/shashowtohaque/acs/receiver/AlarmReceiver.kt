@@ -21,6 +21,10 @@ class AlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: CallDispatcher.ACTION_EXECUTE_CALL
+        val afterAirplaneRecovery = intent.getBooleanExtra(
+            CallDispatcher.EXTRA_AFTER_AIRPLANE_RECOVERY,
+            false
+        )
 
         // Promote process via persistent Foreground Service when Battery Optimization / FGS rules permit
         if (PermissionHelper.canStartForegroundFromBackground(context)) {
@@ -33,7 +37,7 @@ class AlarmReceiver : BroadcastReceiver() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "ACS:CallAlarmWakeLock"
         )
-        wakeLock.acquire(45_000L)
+        wakeLock.acquire(60_000L)
 
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
@@ -71,7 +75,7 @@ class AlarmReceiver : BroadcastReceiver() {
                         return@launch
                     }
 
-                    executeScheduledCall(context, repository, schedule)
+                    executeScheduledCall(context, repository, schedule, afterAirplaneRecovery)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -87,7 +91,8 @@ class AlarmReceiver : BroadcastReceiver() {
     private suspend fun executeScheduledCall(
         context: Context,
         repository: ScheduleRepository,
-        schedule: CallScheduleEntity
+        schedule: CallScheduleEntity,
+        afterAirplaneRecovery: Boolean = false
     ) {
         // Respect Airplane Mode handling
         if (CallDispatcher.isAirplaneModeOn(context)) {
@@ -99,19 +104,28 @@ class AlarmReceiver : BroadcastReceiver() {
                 )
                 repository.updateSchedule(failed)
                 return
+            } else if (afterAirplaneRecovery) {
+                val failed = schedule.copy(
+                    status = ScheduleStatus.FAILED,
+                    lastExecutedMillis = System.currentTimeMillis(),
+                    failureReason = "Airplane Mode remained ON after 15s recovery attempt; unable to place call."
+                )
+                repository.updateSchedule(failed)
+                return
             } else {
                 val disabled = CallDispatcher.disableAirplaneMode(context)
                 if (!disabled) {
                     val failed = schedule.copy(
                         status = ScheduleStatus.FAILED,
                         lastExecutedMillis = System.currentTimeMillis(),
-                        failureReason = "Device in Airplane Mode: unable to toggle Airplane Mode OFF without system/ADB permission."
+                        failureReason = "Device in Airplane Mode: Android/HyperOS blocks toggling Airplane Mode via Modify System Settings alone. Enable Accessibility Airplane Helper or grant WRITE_SECURE_SETTINGS via ADB."
                     )
                     repository.updateSchedule(failed)
                     return
                 }
-                // Wait 10 seconds for cellular network stability before executing the schedule
-                kotlinx.coroutines.delay(10_000L)
+                // Schedule exact wakeup 15 seconds later so cellular radios register without risking goAsync timeout
+                CallDispatcher.schedulePostAirplaneRecoveryAlarm(context, schedule, 15_000L)
+                return
             }
         }
 

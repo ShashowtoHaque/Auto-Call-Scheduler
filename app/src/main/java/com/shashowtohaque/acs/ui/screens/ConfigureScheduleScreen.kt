@@ -8,16 +8,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -34,11 +35,15 @@ import java.util.Locale
 @Composable
 fun ConfigureScheduleScreen(
     editingSchedule: CallScheduleEntity? = null,
+    refreshTick: Int = 0,
     onDismiss: () -> Unit,
     onSaveSchedule: (CallScheduleEntity, (conflictFound: Boolean) -> Unit) -> Unit
 ) {
     val context = LocalContext.current
     val (sim1Operator, sim2Operator) = remember(context) { PermissionHelper.getSimOperatorNames(context) }
+    val canAutoDisableAirplane = remember(refreshTick, context) {
+        PermissionHelper.canAutoDisableAirplaneMode(context)
+    }
 
     var title by remember(editingSchedule) { mutableStateOf(editingSchedule?.title ?: "") }
     var contactName by remember(editingSchedule) { mutableStateOf(editingSchedule?.contactName ?: "") }
@@ -290,6 +295,8 @@ fun ConfigureScheduleScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -307,85 +314,98 @@ fun ConfigureScheduleScreen(
             )
         }
     ) { paddingValues ->
-        Column(
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
                 .consumeWindowInsets(paddingValues)
                 .navigationBarsPadding()
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .imePadding(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             conflictErrorMessage?.let { error ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                item(key = "conflict_error", contentType = "error_banner") {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = error,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = error,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
                     }
                 }
             }
 
             // Title
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            item(key = "title_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
-                    Text(
-                        text = "TITLE",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = {
-                            title = it
-                            conflictErrorMessage = null
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Edit,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp)
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "TITLE",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = title,
+                            onValueChange = {
+                                title = it
+                                conflictErrorMessage = null
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
                 }
             }
 
             // Contact Name & Phone Number + right-side full-height Device Contacts button
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            item(key = "contact_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
-                    Text(
-                        text = "CONTACT NAME & PHONE NUMBER",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "CONTACT NAME & PHONE NUMBER",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -455,15 +475,21 @@ fun ConfigureScheduleScreen(
                     }
                 }
             }
+            }
 
             // Initialization Date & Time
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            item(key = "datetime_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                     Text(
                         text = "INITIALIZATION DATE & TIME",
                         style = MaterialTheme.typography.labelMedium,
@@ -547,15 +573,21 @@ fun ConfigureScheduleScreen(
                     }
                 }
             }
+            }
 
             // CALL REPEAT COUNT
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            item(key = "repeat_count_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -638,15 +670,21 @@ fun ConfigureScheduleScreen(
 
                 }
             }
+            }
 
             // SCHEDULE REPEAT INTERVAL
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+            item(key = "repeat_interval_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                     Text(
                         text = "SCHEDULE REPEAT INTERVAL",
                         style = MaterialTheme.typography.labelMedium,
@@ -832,15 +870,21 @@ fun ConfigureScheduleScreen(
                     }
                 }
             }
+            }
 
             // Target SIM Card with centered two-line layout & real operator names
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            item(key = "target_sim_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                     Text(
                         text = "TARGET SIM CARD",
                         style = MaterialTheme.typography.labelMedium,
@@ -902,18 +946,21 @@ fun ConfigureScheduleScreen(
                     }
                 }
             }
+            }
 
             // Call Behavior & Audio Settings card grouping matching preview
-            ElevatedCard(
-                shape = RoundedCornerShape(14.dp),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+            item(key = "behavior_audio_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                     Text(
                         text = "CALL BEHAVIOR & AUDIO SETTINGS",
                         style = MaterialTheme.typography.labelMedium,
@@ -1065,6 +1112,16 @@ fun ConfigureScheduleScreen(
                                         onValueChange = {},
                                         readOnly = true,
                                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = remindUnitMenuExpanded) },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                            unfocusedBorderColor = if (remindUnitMenuExpanded) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.outlineVariant
+                                            },
+                                            focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                            unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                        ),
                                         modifier = Modifier
                                             .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                                             .fillMaxWidth(),
@@ -1073,20 +1130,61 @@ fun ConfigureScheduleScreen(
                                     )
                                     ExposedDropdownMenu(
                                         expanded = remindUnitMenuExpanded,
-                                        onDismissRequest = { remindUnitMenuExpanded = false }
+                                        onDismissRequest = { remindUnitMenuExpanded = false },
+                                        shape = RoundedCornerShape(14.dp),
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        tonalElevation = 6.dp,
+                                        shadowElevation = 10.dp,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                                     ) {
-                                        listOf(
-                                            RemindBeforeUnit.SECONDS to "Seconds",
-                                            RemindBeforeUnit.MINUTES to "Minutes",
-                                            RemindBeforeUnit.HOURS to "Hours"
-                                        ).forEach { (unit, label) ->
-                                            DropdownMenuItem(
-                                                text = { Text(label) },
-                                                onClick = {
-                                                    remindBeforeUnit = unit
-                                                    remindUnitMenuExpanded = false
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            listOf(
+                                                RemindBeforeUnit.SECONDS to "Seconds",
+                                                RemindBeforeUnit.MINUTES to "Minutes",
+                                                RemindBeforeUnit.HOURS to "Hours"
+                                            ).forEach { (unit, label) ->
+                                                val isSelected = remindBeforeUnit == unit
+                                                Surface(
+                                                    onClick = {
+                                                        remindBeforeUnit = unit
+                                                        remindUnitMenuExpanded = false
+                                                    },
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                                    border = if (isSelected) {
+                                                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
+                                                    } else null,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Text(
+                                                            text = label,
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                        if (isSelected) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                        }
+                                                    }
                                                 }
-                                            )
+                                            }
                                         }
                                     }
                                 }
@@ -1210,51 +1308,129 @@ fun ConfigureScheduleScreen(
                             onCheckedChange = { respectAirplaneMode = it }
                         )
                     }
+
+                    if (!respectAirplaneMode) {
+                        Surface(
+                            color = if (canAutoDisableAirplane) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                            } else {
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                if (canAutoDisableAirplane) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                } else {
+                                    MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
+                                }
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = if (canAutoDisableAirplane) {
+                                        "Airplane Auto-OFF Ready • 15s Signal Wait"
+                                    } else {
+                                        "OS Airplane Mode Restriction Detected"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (canAutoDisableAirplane) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    }
+                                )
+                                Text(
+                                    text = if (canAutoDisableAirplane) {
+                                        "If Airplane Mode is ON at call time, the app will turn it OFF and wait 15 seconds for cellular registration before dialing."
+                                    } else {
+                                        "Android 10-15 & HyperOS block 'Modify system settings' from toggling Airplane Mode. Enable 'Auto Call Scheduler (Airplane Mode Helper)' in Accessibility Settings (no PC/root needed), or grant WRITE_SECURE_SETTINGS via ADB."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (!canAutoDisableAirplane) {
+                                    OutlinedButton(
+                                        onClick = { PermissionHelper.openAccessibilitySettings(context) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Settings,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Enable Accessibility Airplane Helper",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
+            }
             }
 
             // In-Call Note
-            ElevatedCard(shape = RoundedCornerShape(14.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            item(key = "in_call_note_section", contentType = "section_card") {
+                OutlinedCard(
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                    colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
-                    Text(
-                        text = "IN-CALL NOTE",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = inCallNotes,
-                        onValueChange = { inCallNotes = it },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Edit,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        minLines = 2,
-                        shape = RoundedCornerShape(12.dp)
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "IN-CALL NOTE",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = inCallNotes,
+                            onValueChange = { inCallNotes = it },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
                 }
             }
 
-            Button(
-                onClick = submitSchedule,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Text(
-                    text = if (editingSchedule != null) "Save Changes" else "Save & Schedule",
-                    fontWeight = FontWeight.Bold
-                )
+            item(key = "save_button_section", contentType = "action_button") {
+                Button(
+                    onClick = submitSchedule,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text(
+                        text = if (editingSchedule != null) "Save Changes" else "Save & Schedule",
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

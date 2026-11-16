@@ -2,6 +2,7 @@ package com.shashowtohaque.acs.util
 
 import android.Manifest
 import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.ComponentName
@@ -18,6 +19,7 @@ import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import com.shashowtohaque.acs.receiver.AlarmReceiver
 import com.shashowtohaque.acs.receiver.BootReceiver
+import com.shashowtohaque.acs.service.AirplaneModeAccessibilityService
 
 data class SurvivabilityReport(
     val autostartGranted: Boolean,
@@ -161,8 +163,27 @@ object PermissionHelper {
             .apply()
     }
 
+    fun isExactAlarmGranted(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return true
+        return alarmManager.canScheduleExactAlarms()
+    }
+
     fun isWriteSettingsGranted(context: Context): Boolean =
         Settings.System.canWrite(context)
+
+    fun isWriteSecureSettingsGranted(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.WRITE_SECURE_SETTINGS
+        ) == PackageManager.PERMISSION_GRANTED
+
+    fun isAccessibilityHelperEnabled(context: Context): Boolean =
+        AirplaneModeAccessibilityService.isRunning() ||
+            AirplaneModeAccessibilityService.isServiceEnabledInSettings(context)
+
+    fun canAutoDisableAirplaneMode(context: Context): Boolean =
+        isWriteSecureSettingsGranted(context) || isAccessibilityHelperEnabled(context)
 
     fun canStartForegroundFromBackground(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
@@ -204,7 +225,7 @@ object PermissionHelper {
     }
 
     /**
-     * Verifies all 9 mandatory permissions & device settings are currently active.
+     * Verifies all 11 mandatory permissions & device settings are currently active.
      */
     fun areAllPermissionsGranted(context: Context): Boolean {
         return isCallPhoneGranted(context) &&
@@ -215,7 +236,9 @@ object PermissionHelper {
             isShowOnLockScreenAllowed(context) &&
             isOverlayGranted(context) &&
             isNotificationGranted(context) &&
-            isWriteSettingsGranted(context)
+            isWriteSettingsGranted(context) &&
+            isExactAlarmGranted(context) &&
+            isAccessibilityHelperEnabled(context)
     }
 
     fun checkMiuiAppOp(context: Context, opCode: Int): Boolean? {
@@ -445,6 +468,34 @@ object PermissionHelper {
         } catch (_: Exception) {
             openAppDetailsSettings(context)
         }
+    }
+
+    fun openAccessibilitySettings(context: Context) {
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            openAppDetailsSettings(context)
+        }
+    }
+
+    fun openExactAlarmSettings(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+                return
+            } catch (_: Exception) {
+            }
+        }
+        openAppDetailsSettings(context)
     }
 
     /**

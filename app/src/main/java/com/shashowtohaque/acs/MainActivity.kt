@@ -15,6 +15,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -46,16 +56,22 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: ScheduleViewModel by viewModels()
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
-        super.onCreate(savedInstanceState)
-
-        // Request highest available refresh rate (e.g. 120Hz LTPO on Xiaomi/HyperOS)
+    private fun applyMaxRefreshRate() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
-                display?.supportedModes?.maxByOrNull { it.refreshRate }?.let { maxMode ->
+                val currentDisplay = display ?: return
+                val activeMode = currentDisplay.mode
+                val sameResMaxMode = currentDisplay.supportedModes
+                    .filter {
+                        it.physicalWidth == activeMode.physicalWidth &&
+                            it.physicalHeight == activeMode.physicalHeight
+                    }
+                    .maxByOrNull { it.refreshRate }
+                    ?: currentDisplay.supportedModes.maxByOrNull { it.refreshRate }
+                sameResMaxMode?.let { maxMode ->
                     window.attributes = window.attributes.apply {
                         preferredDisplayModeId = maxMode.modeId
+                        preferredRefreshRate = maxMode.refreshRate
                     }
                 }
             } catch (_: Exception) {
@@ -73,6 +89,35 @@ class MainActivity : ComponentActivity() {
             } catch (_: Exception) {
             }
         }
+    }
+
+    private fun readPermissionMask(): Int {
+        var mask = 0
+        if (PermissionHelper.isCallPhoneGranted(this)) mask = mask or (1 shl 0)
+        if (PermissionHelper.isContactsGranted(this)) mask = mask or (1 shl 1)
+        if (PermissionHelper.isAutostartAllowed(this)) mask = mask or (1 shl 2)
+        if (PermissionHelper.isIgnoringBatteryOptimizations(this)) mask = mask or (1 shl 3)
+        if (PermissionHelper.isBackgroundActivityAllowed(this)) mask = mask or (1 shl 4)
+        if (PermissionHelper.isShowOnLockScreenAllowed(this)) mask = mask or (1 shl 5)
+        if (PermissionHelper.isOverlayGranted(this)) mask = mask or (1 shl 6)
+        if (PermissionHelper.isNotificationGranted(this)) mask = mask or (1 shl 7)
+        if (PermissionHelper.isWriteSettingsGranted(this)) mask = mask or (1 shl 8)
+        if (PermissionHelper.isExactAlarmGranted(this)) mask = mask or (1 shl 9)
+        if (PermissionHelper.isAccessibilityHelperEnabled(this)) mask = mask or (1 shl 10)
+        return mask
+    }
+
+    override fun onResume() {
+        super.onResume()
+        applyMaxRefreshRate()
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+
+        // Request highest available refresh rate matching active resolution (e.g. 120Hz LTPO on Xiaomi/HyperOS)
+        applyMaxRefreshRate()
 
         // Android 10+ Lock Screen Presentation Flags
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -121,25 +166,31 @@ class MainActivity : ComponentActivity() {
             ) {
                 val navController = rememberNavController()
                 var permissionTick by remember { mutableIntStateOf(0) }
+                var lastPermissionMask by remember { mutableIntStateOf(readPermissionMask()) }
                 var showConfigureSheet by remember { mutableStateOf(false) }
                 var editingSchedule by remember { mutableStateOf<CallScheduleEntity?>(null) }
+
+                val syncPermissionState: () -> Unit = {
+                    lastPermissionMask = readPermissionMask()
+                    permissionTick++
+                }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission()
                 ) {
-                    permissionTick++
+                    syncPermissionState()
                 }
                 val multiPermissionsLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
                 ) {
-                    permissionTick++
+                    syncPermissionState()
                 }
 
                 // Re-verify permissions whenever the activity resumes from Settings or background
                 DisposableEffect(this@MainActivity) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            permissionTick++
+                            syncPermissionState()
                         }
                     }
                     this@MainActivity.lifecycle.addObserver(observer)
@@ -151,13 +202,15 @@ class MainActivity : ComponentActivity() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
 
-                // Only poll continuously on onboarding; on dashboard, only re-trigger if OS revokes a permission
+                // Poll off-UI-thread and only recompose when a permission status actually changes
                 LaunchedEffect(currentRoute) {
                     while (true) {
                         delay(if (currentRoute == "onboarding") 1500L else 4000L)
-                        if (currentRoute == "onboarding") {
-                            permissionTick++
-                        } else if (!PermissionHelper.areAllPermissionsGranted(this@MainActivity)) {
+                        val newMask = withContext(Dispatchers.Default) {
+                            readPermissionMask()
+                        }
+                        if (newMask != lastPermissionMask) {
+                            lastPermissionMask = newMask
                             permissionTick++
                         }
                     }
@@ -168,7 +221,7 @@ class MainActivity : ComponentActivity() {
                         PermissionStatusItem(
                             id = "CALL_PHONE",
                             title = "Phone Call Permission",
-                            description = "Allows placing scheduled calls directly on SIM 1 or SIM 2 and auto hang-up",
+                            description = "Places direct SIM 1 / SIM 2 calls and enables auto hang-up",
                             isGranted = PermissionHelper.isCallPhoneGranted(this@MainActivity),
                             onRequest = {
                                 multiPermissionsLauncher.launch(
@@ -183,7 +236,7 @@ class MainActivity : ComponentActivity() {
                         PermissionStatusItem(
                             id = "READ_CONTACTS",
                             title = "Read/Write Contacts",
-                            description = "Enables selecting call recipients from device contacts",
+                            description = "Allows picking call recipients from device contacts",
                             isGranted = PermissionHelper.isContactsGranted(this@MainActivity),
                             onRequest = {
                                 multiPermissionsLauncher.launch(
@@ -197,42 +250,42 @@ class MainActivity : ComponentActivity() {
                         PermissionStatusItem(
                             id = "AUTOSTART_HYPEROS",
                             title = "Background Autostart",
-                            description = "Permits BootReceiver & watchdog resurrection after reboot or clearing app from Recents",
+                            description = "Keeps alarms & receivers active after reboot or app close",
                             isGranted = PermissionHelper.isAutostartAllowed(this@MainActivity),
                             onRequest = { PermissionHelper.openHyperOsAutostartSettings(this@MainActivity) }
                         ),
                         PermissionStatusItem(
                             id = "BATTERY_OPTIMIZATION",
                             title = "Battery Optimization",
-                            description = "Sets Battery to Unrestricted / No restrictions so Doze & PowerKeeper never kill the scheduler",
+                            description = "Excludes the scheduler from Doze and battery throttling",
                             isGranted = PermissionHelper.isIgnoringBatteryOptimizations(this@MainActivity),
                             onRequest = { PermissionHelper.openBatteryOptimizationSettings(this@MainActivity) }
                         ),
                         PermissionStatusItem(
                             id = "BACKGROUND_ACTIVITY",
                             title = "Background Activity",
-                            description = "Allows launching call windows from background ('Open new windows while running in the background' on HyperOS)",
+                            description = "Allows launching call windows from the background",
                             isGranted = PermissionHelper.isBackgroundActivityAllowed(this@MainActivity),
                             onRequest = { PermissionHelper.openBackgroundActivitySettings(this@MainActivity) }
                         ),
                         PermissionStatusItem(
                             id = "SHOW_ON_LOCKSCREEN",
                             title = "Show on Lock Screen",
-                            description = "Displays call triggers and ongoing status over the lock screen",
+                            description = "Displays scheduled call triggers over the lock screen",
                             isGranted = PermissionHelper.isShowOnLockScreenAllowed(this@MainActivity),
                             onRequest = { PermissionHelper.openLockScreenPermissionSettings(this@MainActivity) }
                         ),
                         PermissionStatusItem(
                             id = "SYSTEM_ALERT_WINDOW",
                             title = "Display Over Other Apps",
-                            description = "Required for call confirmation overlays on Android 10+",
+                            description = "Enables in-call notes and controls over other apps",
                             isGranted = PermissionHelper.isOverlayGranted(this@MainActivity),
                             onRequest = { PermissionHelper.openOverlaySettings(this@MainActivity) }
                         ),
                         PermissionStatusItem(
                             id = "POST_NOTIFICATIONS",
                             title = "Active Notification",
-                            description = "Displays persistent Foreground Service schedule counts on status bar & lock screen",
+                            description = "Shows live schedule counts in status bar & lock screen",
                             isGranted = PermissionHelper.isNotificationGranted(this@MainActivity),
                             onRequest = {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -243,9 +296,23 @@ class MainActivity : ComponentActivity() {
                         PermissionStatusItem(
                             id = "WRITE_SETTINGS",
                             title = "Modify System Settings",
-                            description = "Allows disabling Airplane Mode (with ADB/system fallback) when Respect Airplane Mode is unchecked",
+                            description = "Supports system settings access for Airplane Mode recovery",
                             isGranted = PermissionHelper.isWriteSettingsGranted(this@MainActivity),
                             onRequest = { PermissionHelper.openWriteSettings(this@MainActivity) }
+                        ),
+                        PermissionStatusItem(
+                            id = "SCHEDULE_EXACT_ALARM",
+                            title = "Alarms & Reminders",
+                            description = "Ensures exact-second call and network recovery wakeups",
+                            isGranted = PermissionHelper.isExactAlarmGranted(this@MainActivity),
+                            onRequest = { PermissionHelper.openExactAlarmSettings(this@MainActivity) }
+                        ),
+                        PermissionStatusItem(
+                            id = "ACCESSIBILITY_SERVICE",
+                            title = "Accessibility Airplane Helper",
+                            description = "Turns Airplane Mode OFF automatically (allow restricted settings if greyed)",
+                            isGranted = PermissionHelper.isAccessibilityHelperEnabled(this@MainActivity),
+                            onRequest = { PermissionHelper.openAccessibilitySettings(this@MainActivity) }
                         )
                     )
                 }
@@ -274,7 +341,34 @@ class MainActivity : ComponentActivity() {
                     if (PermissionHelper.areAllPermissionsGranted(this@MainActivity)) "dashboard" else "onboarding"
                 }
 
-                NavHost(navController = navController, startDestination = startDestination) {
+                NavHost(
+                    navController = navController,
+                    startDestination = startDestination,
+                    enterTransition = {
+                        slideInHorizontally(
+                            initialOffsetX = { it / 6 },
+                            animationSpec = tween(220, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(220))
+                    },
+                    exitTransition = {
+                        slideOutHorizontally(
+                            targetOffsetX = { -it / 10 },
+                            animationSpec = tween(200, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(180))
+                    },
+                    popEnterTransition = {
+                        slideInHorizontally(
+                            initialOffsetX = { -it / 6 },
+                            animationSpec = tween(220, easing = FastOutSlowInEasing)
+                        ) + fadeIn(animationSpec = tween(220))
+                    },
+                    popExitTransition = {
+                        slideOutHorizontally(
+                            targetOffsetX = { it / 6 },
+                            animationSpec = tween(200, easing = FastOutSlowInEasing)
+                        ) + fadeOut(animationSpec = tween(180))
+                    }
+                ) {
                     composable("onboarding") {
                         OnboardingScreen(
                             permissionList = permissionList,
@@ -300,49 +394,70 @@ class MainActivity : ComponentActivity() {
                         val schedules by viewModel.allSchedules.collectAsState()
                         var selectedTab by remember { mutableStateOf(DashboardTab.ALL) }
 
-                        if (showConfigureSheet) {
-                            BackHandler {
-                                showConfigureSheet = false
-                                editingSchedule = null
-                            }
-                            ConfigureScheduleScreen(
-                                editingSchedule = editingSchedule,
-                                onDismiss = {
+                        AnimatedContent(
+                            targetState = showConfigureSheet,
+                            transitionSpec = {
+                                if (targetState) {
+                                    (slideInVertically(
+                                        initialOffsetY = { it / 10 },
+                                        animationSpec = tween(230, easing = FastOutSlowInEasing)
+                                    ) + fadeIn(tween(200))) togetherWith
+                                        fadeOut(tween(150))
+                                } else {
+                                    fadeIn(tween(200)) togetherWith
+                                        (slideOutVertically(
+                                            targetOffsetY = { it / 10 },
+                                            animationSpec = tween(200, easing = FastOutSlowInEasing)
+                                        ) + fadeOut(tween(160)))
+                                }
+                            },
+                            label = "DashboardConfigureTransition"
+                        ) { configureVisible ->
+                            if (configureVisible) {
+                                BackHandler {
                                     showConfigureSheet = false
                                     editingSchedule = null
-                                },
-                                onSaveSchedule = { newSchedule, callback ->
-                                    viewModel.saveSchedule(newSchedule, callback)
                                 }
-                            )
-                        } else {
-                            DashboardScreen(
-                                schedules = schedules,
-                                selectedTab = selectedTab,
-                                onTabSelected = { selectedTab = it },
-                                onAddScheduleClicked = {
-                                    editingSchedule = null
-                                    showConfigureSheet = true
-                                },
-                                onEditSchedule = { schedule ->
-                                    editingSchedule = schedule
-                                    showConfigureSheet = true
-                                },
-                                onTogglePause = { viewModel.togglePause(it) },
-                                onTestCall = { schedule ->
-                                    CallDispatcher.executeCall(this@MainActivity, schedule)
-                                },
-                                onDelete = { viewModel.deleteSchedule(it) },
-                                onNavigatePermissions = { navController.navigate("onboarding") },
-                                themeMode = themeMode,
-                                onThemeModeChanged = { newMode ->
-                                    themeMode = newMode
-                                    uiPrefs.edit().putString("ui_theme_mode", newMode).apply()
-                                },
-                                onCloseApp = {
-                                    finishAffinity()
-                                }
-                            )
+                                ConfigureScheduleScreen(
+                                    editingSchedule = editingSchedule,
+                                    refreshTick = permissionTick,
+                                    onDismiss = {
+                                        showConfigureSheet = false
+                                        editingSchedule = null
+                                    },
+                                    onSaveSchedule = { newSchedule, callback ->
+                                        viewModel.saveSchedule(newSchedule, callback)
+                                    }
+                                )
+                            } else {
+                                DashboardScreen(
+                                    schedules = schedules,
+                                    selectedTab = selectedTab,
+                                    onTabSelected = { selectedTab = it },
+                                    onAddScheduleClicked = {
+                                        editingSchedule = null
+                                        showConfigureSheet = true
+                                    },
+                                    onEditSchedule = { schedule ->
+                                        editingSchedule = schedule
+                                        showConfigureSheet = true
+                                    },
+                                    onTogglePause = { viewModel.togglePause(it) },
+                                    onTestCall = { schedule ->
+                                        CallDispatcher.executeCall(this@MainActivity, schedule)
+                                    },
+                                    onDelete = { viewModel.deleteSchedule(it) },
+                                    onNavigatePermissions = { navController.navigate("onboarding") },
+                                    themeMode = themeMode,
+                                    onThemeModeChanged = { newMode ->
+                                        themeMode = newMode
+                                        uiPrefs.edit().putString("ui_theme_mode", newMode).apply()
+                                    },
+                                    onCloseApp = {
+                                        finishAffinity()
+                                    }
+                                )
+                            }
                         }
                     }
                 }

@@ -70,7 +70,7 @@ data class CallScheduleEntity(
     val remindBeforeUnit: RemindBeforeUnit = RemindBeforeUnit.MINUTES,
     val reminderAlertType: ReminderAlertType = ReminderAlertType.SOUND,
     val autoHangupSeconds: Int = 45, // 0 = disabled, 5..60s (5s increment)
-    val respectAirplaneMode: Boolean = true, // If true, fail when in Airplane Mode; if false, turn OFF & wait 10s
+    val respectAirplaneMode: Boolean = true, // If true, fail when in Airplane Mode; if false, turn OFF & wait 15s
     val callRepeatMode: CallRepeatMode = CallRepeatMode.NO_REPEAT,
     val callRepeatCount: Int = 0, // Excludes initial call when CUSTOM (1..100 -> 2..101 total calls)
     val repeatIntervalValue: Int = 5, // Min 1 (1 min to 5 years)

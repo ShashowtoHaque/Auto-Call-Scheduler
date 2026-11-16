@@ -1,11 +1,17 @@
 package com.shashowtohaque.acs.ui.screens
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,7 +20,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -37,11 +42,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-enum class DashboardTab(val title: String, val emptyTitle: String) {
-    ALL("All", "No Schedule"),
-    PENDING("Pending", "No Pending Schedules"),
-    COMPLETED("Completed", "No Completed Schedules"),
-    FAILED("Failed", "No Failed Schedules")
+enum class DashboardTab(
+    val title: String,
+    val emptyTitle: String,
+    val icon: ImageVector
+) {
+    ALL("All", "No Schedule", Icons.Default.ListAlt),
+    PENDING("Pending", "No Pending Schedule", Icons.Default.Schedule),
+    COMPLETED("Completed", "No Completed Schedule", Icons.Default.CheckCircle),
+    FAILED("Failed", "No Failed Schedule", Icons.Default.ErrorOutline)
 }
 
 private data class StatusBadgeStyle(
@@ -50,6 +59,17 @@ private data class StatusBadgeStyle(
     val fg: Color,
     val icon: ImageVector?
 )
+
+private val PendingBg = Color(0xFF3B82F6).copy(alpha = 0.14f)
+private val PendingFg = Color(0xFF2563EB)
+private val PausedBg = Color(0xFFF59E0B).copy(alpha = 0.18f)
+private val PausedFg = Color(0xFFD97706)
+private val CompletedBg = Color(0xFF10B981).copy(alpha = 0.18f)
+private val CompletedFg = Color(0xFF059669)
+private val FailedBg = Color(0xFFEF4444).copy(alpha = 0.18f)
+private val FailedFg = Color(0xFFDC2626)
+private val SpeakerChipBg = Color(0xFF10B981).copy(alpha = 0.14f)
+private val HangupChipBg = Color(0xFFF59E0B).copy(alpha = 0.14f)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,13 +102,43 @@ fun DashboardScreen(
         }
     }
 
-    val filteredList = remember(schedules, selectedTab) {
-        when (selectedTab) {
-            DashboardTab.ALL -> schedules
-            DashboardTab.PENDING -> schedules.filter { it.status == ScheduleStatus.PENDING || it.status == ScheduleStatus.PAUSED }
-            DashboardTab.COMPLETED -> schedules.filter { it.status == ScheduleStatus.COMPLETED }
-            DashboardTab.FAILED -> schedules.filter { it.status == ScheduleStatus.FAILED }
+    val tabs = remember { DashboardTab.values() }
+    val pagerState = rememberPagerState(
+        initialPage = selectedTab.ordinal,
+        pageCount = { tabs.size }
+    )
+    val listStates = remember { List(tabs.size) { LazyListState() } }
+    val currentSelectedTab by rememberUpdatedState(selectedTab)
+
+    LaunchedEffect(selectedTab) {
+        if (pagerState.currentPage != selectedTab.ordinal) {
+            pagerState.animateScrollToPage(
+                page = selectedTab.ordinal,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            )
         }
+    }
+
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { settledIndex ->
+            val settledTab = tabs[settledIndex]
+            if (settledTab != currentSelectedTab) {
+                onTabSelected(settledTab)
+            }
+        }
+    }
+
+    val pendingList = remember(schedules) {
+        schedules.filter { it.status == ScheduleStatus.PENDING || it.status == ScheduleStatus.PAUSED }
+    }
+    val completedList = remember(schedules) {
+        schedules.filter { it.status == ScheduleStatus.COMPLETED }
+    }
+    val failedList = remember(schedules) {
+        schedules.filter { it.status == ScheduleStatus.FAILED }
     }
 
     Scaffold(
@@ -298,74 +348,110 @@ fun DashboardScreen(
         ) {
             // 4 Tabs: All, Pending, Completed, Failed
             PrimaryTabRow(
-                selectedTabIndex = selectedTab.ordinal,
+                selectedTabIndex = pagerState.currentPage,
                 containerColor = MaterialTheme.colorScheme.surface
             ) {
-                DashboardTab.values().forEach { tab ->
+                tabs.forEach { tab ->
+                    val isTabSelected = pagerState.currentPage == tab.ordinal
                     Tab(
-                        selected = selectedTab == tab,
+                        selected = isTabSelected,
                         onClick = { onTabSelected(tab) },
+                        icon = {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.title,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
                         text = {
                             Text(
                                 text = tab.title,
-                                fontWeight = if (selectedTab == tab) FontWeight.Bold else FontWeight.Normal
+                                fontWeight = if (isTabSelected) FontWeight.Bold else FontWeight.Normal,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     )
                 }
             }
 
-            if (filteredList.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.EventBusy,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(64.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = selectedTab.emptyTitle,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Tap the + button to configure a new call schedule",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            textAlign = TextAlign.Center
-                        )
-                    }
+            HorizontalPager(
+                state = pagerState,
+                beyondViewportPageCount = 1,
+                key = { tabs[it].ordinal },
+                flingBehavior = PagerDefaults.flingBehavior(
+                    state = pagerState,
+                    snapAnimationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) { pageIndex ->
+                val pageTab = tabs[pageIndex]
+                val pageList = when (pageTab) {
+                    DashboardTab.ALL -> schedules
+                    DashboardTab.PENDING -> pendingList
+                    DashboardTab.COMPLETED -> completedList
+                    DashboardTab.FAILED -> failedList
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(
-                        items = filteredList,
-                        key = { it.id },
-                        contentType = { "schedule_card" }
-                    ) { schedule ->
-                        val simOperator = if (schedule.simSlot == SimSlot.SIM_1) sim1Operator else sim2Operator
-                        ScheduleItemCard(
-                            schedule = schedule,
-                            simOperator = simOperator,
-                            dateFormat = cardDateFormat,
-                            onCardClick = { pendingEditSchedule = schedule },
-                            onTogglePause = { onTogglePause(schedule) },
-                            onTestCall = { onTestCall(schedule) },
-                            onDelete = { pendingDeleteSchedule = schedule }
-                        )
+
+                if (pageList.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.EventBusy,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(64.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = pageTab.emptyTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Tap the + button to configure a new call schedule",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        state = listStates[pageIndex],
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(
+                            items = pageList,
+                            key = { it.id },
+                            contentType = { "schedule_card" }
+                        ) { schedule ->
+                            val simOperator = if (schedule.simSlot == SimSlot.SIM_1) sim1Operator else sim2Operator
+                            ScheduleItemCard(
+                                schedule = schedule,
+                                simOperator = simOperator,
+                                dateFormat = cardDateFormat,
+                                onCardClick = { pendingEditSchedule = schedule },
+                                onTogglePause = { onTogglePause(schedule) },
+                                onTestCall = { onTestCall(schedule) },
+                                onDelete = { pendingDeleteSchedule = schedule }
+                            )
+                        }
                     }
                 }
             }
@@ -450,7 +536,7 @@ fun DashboardScreen(
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "Made using Google Ai Studio.",
+                        text = "Built using Google Ai Studio",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -486,20 +572,40 @@ fun ScheduleItemCard(
     val formattedDate = remember(schedule.targetTimeMillis) {
         dateFormat.format(Date(schedule.targetTimeMillis))
     }
+    val hasRepeat = remember(schedule.callRepeatMode, schedule.repeatDaysOfWeek) {
+        schedule.hasScheduleRepeat()
+    }
+    val repeatSummaryText = remember(
+        hasRepeat,
+        schedule.callRepeatMode,
+        schedule.callRepeatCount,
+        schedule.repeatIntervalValue,
+        schedule.repeatIntervalUnit,
+        schedule.repeatDaysOfWeek
+    ) {
+        if (hasRepeat) CallDispatcher.formatScheduleRepeatSummary(schedule) else ""
+    }
+    val badge = remember(schedule.status) {
+        when (schedule.status) {
+            ScheduleStatus.PENDING -> StatusBadgeStyle("PENDING", PendingBg, PendingFg, null)
+            ScheduleStatus.PAUSED -> StatusBadgeStyle("PAUSED", PausedBg, PausedFg, null)
+            ScheduleStatus.COMPLETED -> StatusBadgeStyle("COMPLETED", CompletedBg, CompletedFg, Icons.Default.CheckCircle)
+            ScheduleStatus.FAILED -> StatusBadgeStyle("FAILED", FailedBg, FailedFg, Icons.Default.ErrorOutline)
+        }
+    }
 
     OutlinedCard(
         shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         colors = CardDefaults.outlinedCardColors(
             containerColor = if (isPaused) {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
             } else {
                 MaterialTheme.colorScheme.surfaceContainerLow
             }
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (isPaused) 0.78f else 1f)
             .clickable { onCardClick() }
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -519,14 +625,9 @@ fun ScheduleItemCard(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
+                            color = if (isPaused) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        val badge = when (schedule.status) {
-                            ScheduleStatus.PENDING -> StatusBadgeStyle("PENDING", Color(0xFF3B82F6).copy(alpha = 0.14f), Color(0xFF2563EB), null)
-                            ScheduleStatus.PAUSED -> StatusBadgeStyle("PAUSED", Color(0xFFF59E0B).copy(alpha = 0.18f), Color(0xFFD97706), null)
-                            ScheduleStatus.COMPLETED -> StatusBadgeStyle("COMPLETED", Color(0xFF10B981).copy(alpha = 0.18f), Color(0xFF059669), Icons.Default.CheckCircle)
-                            ScheduleStatus.FAILED -> StatusBadgeStyle("FAILED", Color(0xFFEF4444).copy(alpha = 0.18f), Color(0xFFDC2626), Icons.Default.ErrorOutline)
-                        }
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = badge.bg
@@ -633,7 +734,7 @@ fun ScheduleItemCard(
                 if (schedule.audioRoute == AudioRoute.SPEAKER) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFF10B981).copy(alpha = 0.14f)
+                        color = SpeakerChipBg
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -643,21 +744,20 @@ fun ScheduleItemCard(
                             Icon(
                                 imageVector = Icons.Default.VolumeUp,
                                 contentDescription = null,
-                                tint = Color(0xFF059669),
+                                tint = CompletedFg,
                                 modifier = Modifier.size(12.dp)
                             )
                             Text(
                                 text = "Speaker On",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF059669)
+                                color = CompletedFg
                             )
                         }
                     }
                 }
 
-                if (schedule.hasScheduleRepeat()) {
-                    val summaryText = CallDispatcher.formatScheduleRepeatSummary(schedule)
+                if (hasRepeat) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
@@ -674,7 +774,7 @@ fun ScheduleItemCard(
                                 modifier = Modifier.size(12.dp)
                             )
                             Text(
-                                text = summaryText,
+                                text = repeatSummaryText,
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.primary
@@ -712,13 +812,13 @@ fun ScheduleItemCard(
                 if (schedule.autoHangupSeconds > 0) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFFF59E0B).copy(alpha = 0.14f)
+                        color = HangupChipBg
                     ) {
                         Text(
                             text = "End in ${schedule.autoHangupSeconds}s",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFFD97706),
+                            color = PausedFg,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
@@ -732,7 +832,7 @@ fun ScheduleItemCard(
                     }
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = Color(0xFF3B82F6).copy(alpha = 0.14f)
+                        color = PendingBg
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -742,14 +842,14 @@ fun ScheduleItemCard(
                             Icon(
                                 imageVector = Icons.Default.Notifications,
                                 contentDescription = null,
-                                tint = Color(0xFF2563EB),
+                                tint = PendingFg,
                                 modifier = Modifier.size(11.dp)
                             )
                             Text(
                                 text = "Remind ${schedule.remindBeforeValue} $unitText before",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF2563EB)
+                                color = PendingFg
                             )
                         }
                     }
@@ -801,7 +901,7 @@ fun ScheduleItemCard(
                         onClick = onTogglePause,
                         shape = RoundedCornerShape(8.dp),
                         color = if (isPaused) {
-                            Color(0xFF10B981).copy(alpha = 0.16f)
+                            CompletedBg
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant
                         }
@@ -814,14 +914,14 @@ fun ScheduleItemCard(
                             Icon(
                                 imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                                 contentDescription = if (isPaused) "Resume" else "Pause",
-                                tint = if (isPaused) Color(0xFF059669) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = if (isPaused) CompletedFg else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
                                 text = if (isPaused) "Resume" else "Pause",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (isPaused) Color(0xFF059669) else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isPaused) CompletedFg else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
